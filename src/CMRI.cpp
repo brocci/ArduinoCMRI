@@ -202,7 +202,9 @@ uint8_t CMRI::_decode(uint8_t c)
 		else if (c == INIT)
 			_mode = DECODE_DATA;
 		else if (c == POLL)
-			goto POSTAMBLE_POLL;
+			// Consume poll body via IGNORE_DATA until ETX (DLE-aware),
+			// then reply from POSTAMBLE_IGNORE.
+			_mode = IGNORE_DATA;
 		else
 			_mode = POSTAMBLE_OTHER;
 		break;
@@ -255,11 +257,11 @@ POSTAMBLE_SET:
 	_rx_index = 0;
 	return _rx_packet_type;
 
-POSTAMBLE_POLL:
-	_mode = PREAMBLE_1;
-	return POLL;
-
 POSTAMBLE_IGNORE:
 	_mode = PREAMBLE_1;
+	// POLL frames consume body to ETX above; reply after ETX
+	// to avoid RS-485 bus contention (host still transmitting).
+	if (_rx_packet_type == POLL)
+		return POLL;
 	return NOOP;
 }
