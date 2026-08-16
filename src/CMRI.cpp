@@ -39,7 +39,7 @@ CMRI::CMRI(unsigned int address, unsigned int input_bits, unsigned int output_bi
 
       // parsing state
       ,
-      _mode(PREAMBLE_1), _rx_index(0), _rx_data_len(0), _init_handler(nullptr), _init_buffer(nullptr), _init_length(0), _transmit_delay_us(TRANSMIT_DELAY_US)
+      _mode(PREAMBLE_1), _rx_index(0), _rx_data_len(0), _init_handler(nullptr), _init_buffer(nullptr), _init_length(0), _transmit_delay_us(TRANSMIT_DELAY_US), _last_byte_time_ms(0)
 
 {
 	// clear to zero
@@ -203,6 +203,20 @@ void CMRI::_store_data_byte(uint8_t c)
 
 uint8_t CMRI::_decode(uint8_t c)
 {
+	// Inter-byte timeout: if a gap between bytes exceeds INTER_BYTE_TIMEOUT_MS,
+	// assume the current frame was truncated and reset the parser to wait for a
+	// new preamble. This prevents a corrupt frame from consuming subsequent data.
+	unsigned long now = millis();
+	if (_mode != PREAMBLE_1 && _mode != PREAMBLE_2 && _mode != PREAMBLE_3)
+	{
+		if (now - _last_byte_time_ms > INTER_BYTE_TIMEOUT_MS)
+		{
+			_mode = PREAMBLE_1;
+			_rx_index = 0;
+		}
+	}
+	_last_byte_time_ms = now;
+
 	switch (_mode)
 	{
 	case PREAMBLE_1:
