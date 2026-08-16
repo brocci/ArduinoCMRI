@@ -236,6 +236,53 @@ void test_transmit_escapes_control_bytes(void)
 	TEST_ASSERT_EQUAL_UINT8(CMRI::ETX, s.tx[10]);
 }
 
+// A well-formed POLL waits for ETX before replying.
+void test_poll_waits_for_etx(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s);
+
+	cmri.set_byte(0, 0x55);
+
+	feed_packet(s, 0, CMRI::POLL, nullptr, 0);
+	TEST_ASSERT_TRUE(cmri.process());
+	TEST_ASSERT_EQUAL_UINT8(CMRI::GET, s.tx[4]);
+	TEST_ASSERT_EQUAL_UINT8(0x55, s.tx[5]);
+}
+
+// A POLL without ETX produces no reply.
+void test_poll_truncated_no_reply(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s);
+
+	cmri.set_byte(0, 0x55);
+
+	s.feed(0xFF);
+	s.feed(0xFF);
+	s.feed(CMRI::STX);
+	s.feed('A' + 0);
+	s.feed(CMRI::POLL);
+
+	TEST_ASSERT_FALSE(cmri.process());
+	TEST_ASSERT_EQUAL_UINT(0u, s.tx.size());
+}
+
+// A POLL with body bytes waits for ETX before replying.
+void test_poll_with_body_waits_for_etx(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s);
+
+	cmri.set_byte(0, 0x77);
+
+	uint8_t body[2] = {0x01, 0x02};
+	feed_packet(s, 0, CMRI::POLL, body, 2);
+	TEST_ASSERT_TRUE(cmri.process());
+	TEST_ASSERT_EQUAL_UINT8(CMRI::GET, s.tx[4]);
+	TEST_ASSERT_EQUAL_UINT8(0x77, s.tx[5]);
+}
+
 // A third SYN byte does not desync the parser.
 void test_triple_syn_accepted(void)
 {
@@ -314,6 +361,9 @@ int main(int, char **)
 	RUN_TEST(test_init_ignored_without_handler);
 	RUN_TEST(test_address_filtering);
 	RUN_TEST(test_transmit_escapes_control_bytes);
+	RUN_TEST(test_poll_waits_for_etx);
+	RUN_TEST(test_poll_truncated_no_reply);
+	RUN_TEST(test_poll_with_body_waits_for_etx);
 	RUN_TEST(test_triple_syn_accepted);
 	RUN_TEST(test_quad_syn_accepted);
 	RUN_TEST(test_syn_in_body_not_resynced);
