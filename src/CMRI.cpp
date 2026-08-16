@@ -39,7 +39,7 @@ CMRI::CMRI(unsigned int address, unsigned int input_bits, unsigned int output_bi
 
       // parsing state
       ,
-      _mode(PREAMBLE_1), _rx_index(0), _rx_data_len(0), _init_handler(nullptr), _init_buffer(nullptr), _init_length(0)
+      _mode(PREAMBLE_1), _rx_index(0), _rx_data_len(0), _init_handler(nullptr), _init_buffer(nullptr), _init_length(0), _transmit_delay_us(TRANSMIT_DELAY_US)
 
 {
 	// clear to zero
@@ -70,6 +70,11 @@ void CMRI::set_init_handler(void (*handler)(const uint8_t *, int))
 		if (_init_buffer == nullptr)
 			_init_length = 0; // allocation failed: discard INIT bodies rather than risk a null write
 	}
+}
+
+void CMRI::set_transmit_delay(unsigned int delay_us)
+{
+	_transmit_delay_us = delay_us;
 }
 
 // reads in serial data, decodes packets
@@ -164,7 +169,7 @@ bool CMRI::set_byte(int pos, char b)
 
 void CMRI::transmit()
 {
-	delayMicroseconds(50); // a minscule delay to let things recover
+	delayMicroseconds(_transmit_delay_us);
 	_serial.write(255);
 	_serial.write(255);
 	_serial.write(STX);
