@@ -60,16 +60,17 @@ void test_set_bit_reflected_in_transmit(void)
 	CMRI cmri(0, 24, 48, s); // 3 input bytes, 6 output bytes
 
 	TEST_ASSERT_TRUE(cmri.set_bit(0, true));
-	TEST_ASSERT_TRUE(cmri.set_bit(9, true)); // byte 1, bit 1
+	// byte 1, bit 2 (value 0x04) — deliberately not bit 1, whose 0x02 value
+	// equals STX and would be DLE-escaped (see test_transmit_escapes_stx).
+	TEST_ASSERT_TRUE(cmri.set_bit(10, true));
 
 	cmri.transmit();
 
 	// Frame: FF FF STX 'A' GET <3 data bytes> ETX
-	// byte 1 = 0x02 (STX), so it gets DLE-escaped to ESC 0x02
-	TEST_ASSERT_EQUAL_UINT8(0x01, s.tx[5]);      // byte 0, bit 0
-	TEST_ASSERT_EQUAL_UINT8(CMRI::ESC, s.tx[6]); // DLE escape for byte 1 (STX value)
-	TEST_ASSERT_EQUAL_UINT8(0x02, s.tx[7]);      // byte 1, bit 1
-	TEST_ASSERT_EQUAL_UINT8(0x00, s.tx[8]);      // byte 2
+	// byte 1 = 0x04 (bit 2), not 0x02 (STX), so no DLE escaping needed
+	TEST_ASSERT_EQUAL_UINT8(0x01, s.tx[5]); // byte 0, bit 0
+	TEST_ASSERT_EQUAL_UINT8(0x04, s.tx[6]); // byte 1, bit 2
+	TEST_ASSERT_EQUAL_UINT8(0x00, s.tx[7]); // byte 2
 }
 
 // Regression for the set_bit() bounds bug: the old (pos + 7) / 8 check wrongly
@@ -238,6 +239,26 @@ void test_transmit_escapes_control_bytes(void)
 	TEST_ASSERT_EQUAL_UINT8(CMRI::ESC, s.tx[8]);
 	TEST_ASSERT_EQUAL_UINT8(0x00, s.tx[9]);
 	TEST_ASSERT_EQUAL_UINT8(CMRI::ETX, s.tx[10]);
+}
+
+// Regression for #18: an output data byte equal to STX (0x02) must be
+// DLE-escaped in the transmitted frame, otherwise the host mistakes it for
+// start-of-text and loses frame sync.
+void test_transmit_escapes_stx(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s); // 3 input bytes
+
+	cmri.set_byte(0, CMRI::STX); // looks like start-of-frame
+
+	cmri.transmit();
+
+	// header (5) then escaped STX then the remaining (unescaped) payload + ETX
+	TEST_ASSERT_EQUAL_UINT8(CMRI::ESC, s.tx[5]);
+	TEST_ASSERT_EQUAL_UINT8(CMRI::STX, s.tx[6]);
+	TEST_ASSERT_EQUAL_UINT8(0x00, s.tx[7]);
+	TEST_ASSERT_EQUAL_UINT8(0x00, s.tx[8]);
+	TEST_ASSERT_EQUAL_UINT8(CMRI::ETX, s.tx[9]);
 }
 
 // A well-formed POLL waits for ETX before replying.
@@ -447,6 +468,7 @@ int main(int, char **)
 	RUN_TEST(test_init_ignored_without_handler);
 	RUN_TEST(test_address_filtering);
 	RUN_TEST(test_transmit_escapes_control_bytes);
+	RUN_TEST(test_transmit_escapes_stx);
 	RUN_TEST(test_poll_waits_for_etx);
 	RUN_TEST(test_poll_truncated_no_reply);
 	RUN_TEST(test_poll_with_body_waits_for_etx);
