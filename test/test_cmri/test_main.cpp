@@ -455,6 +455,127 @@ void test_dle_at_end_of_truncated_frame(void)
 	TEST_ASSERT_EQUAL_UINT8(0x05, cmri.get_byte(3));
 }
 
+// Regression: a node that has been polled (its _rx_packet_type is 'P') must NOT
+// reply when it hears another node's POLL. Before the fix, finishing an ignored
+// frame checked the stale packet type and spuriously transmitted a GET reply,
+// which on a multi-node bus collided with the addressed node's response.
+void test_no_reply_to_other_nodes_poll(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s); // we are node 0
+
+	cmri.set_byte(0, 0x55);
+
+	// JMRI polls us first, so _rx_packet_type latches to POLL.
+	feed_packet(s, 0, CMRI::POLL, nullptr, 0);
+	TEST_ASSERT_TRUE(cmri.process());
+
+	// Now JMRI polls node 1; we only hear it. We must stay silent.
+	s.tx.clear();
+	feed_packet(s, 1, CMRI::POLL, nullptr, 0);
+	TEST_ASSERT_FALSE(cmri.process());
+	TEST_ASSERT_EQUAL_UINT(0u, s.tx.size());
+}
+
+// Regression: same as above, but the ignored frame is another node's GET reply.
+// This was the ping-pong: each node's reply triggered the other's stale reply.
+void test_no_reply_to_other_nodes_get(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s); // we are node 0
+
+	cmri.set_byte(0, 0x55);
+
+	// JMRI polls us first, so _rx_packet_type latches to POLL.
+	feed_packet(s, 0, CMRI::POLL, nullptr, 0);
+	TEST_ASSERT_TRUE(cmri.process());
+
+	// Node 1's GET reply frame (as produced by its transmit()): FF FF STX 'B' 'R' data ETX.
+	s.tx.clear();
+	s.feed(0xFF);
+	s.feed(0xFF);
+	s.feed(CMRI::STX);
+	s.feed('A' + 1);
+	s.feed(CMRI::GET);
+	s.feed(0xAA);
+	s.feed(0x00);
+	s.feed(0x00);
+	s.feed(CMRI::ETX);
+
+	TEST_ASSERT_FALSE(cmri.process());
+	TEST_ASSERT_EQUAL_UINT(0u, s.tx.size());
+}
+
+// A POLL addressed to us still replies exactly once, even after ignoring other
+// nodes' frames in between (stale _rx_packet_type must not suppress it).
+void test_poll_still_replies_after_ignoring(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s); // we are node 0
+
+	cmri.set_byte(0, 0x66);
+
+	// Ignore a SET and a POLL for node 1.
+	uint8_t set_data[6] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
+	feed_packet(s, 1, CMRI::SET, set_data, 6);
+	feed_packet(s, 1, CMRI::POLL, nullptr, 0);
+
+	// Our own poll must still produce one reply.
+	feed_packet(s, 0, CMRI::POLL, nullptr, 0);
+	TEST_ASSERT_TRUE(cmri.process());
+
+	// Exactly one GET frame, with our staged byte.
+	TEST_ASSERT_EQUAL_UINT(9u, s.tx.size());
+	TEST_ASSERT_EQUAL_UINT8(CMRI::GET, s.tx[4]);
+	TEST_ASSERT_EQUAL_UINT8(0x66, s.tx[5]);
+}
+
+// PR #27: process() returns the packet type. A POLL must report CMRI::POLL.
+void test_process_returns_poll(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s);
+
+	feed_packet(s, 0, CMRI::POLL, nullptr, 0);
+	TEST_ASSERT_EQUAL_UINT8(CMRI::POLL, cmri.process());
+}
+
+// PR #27: a SET must report CMRI::SET (not just "truthy").
+void test_process_returns_set(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s);
+
+	uint8_t data[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+	feed_packet(s, 0, CMRI::SET, data, 6);
+	TEST_ASSERT_EQUAL_UINT8(CMRI::SET, cmri.process());
+}
+
+// PR #27: ignoring another node's frame must report CMRI::NOOP.
+void test_process_returns_noop_for_foreign_frame(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s); // we are node 0
+
+	uint8_t data[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+	feed_packet(s, 1, CMRI::SET, data, 6); // addressed to node 1
+	TEST_ASSERT_EQUAL_UINT8(CMRI::NOOP, cmri.process());
+}
+
+// PR #27 + #26: an INIT delivers its payload to the handler but must report
+// CMRI::NOOP (it never signals "outputs updated").
+void test_process_returns_noop_for_init(void)
+{
+	Stream s;
+	CMRI cmri(0, 24, 48, s);
+	cmri.set_init_handler(capture_init);
+
+	uint8_t init_data[4] = {'M', 0x00, 0x0A, 0x00};
+	feed_packet(s, 0, CMRI::INIT, init_data, 4);
+	TEST_ASSERT_EQUAL_UINT8(CMRI::NOOP, cmri.process());
+	TEST_ASSERT_EQUAL_UINT8(4, g_init_len);
+}
+
 int main(int, char **)
 {
 	UNITY_BEGIN();
@@ -472,6 +593,13 @@ int main(int, char **)
 	RUN_TEST(test_poll_waits_for_etx);
 	RUN_TEST(test_poll_truncated_no_reply);
 	RUN_TEST(test_poll_with_body_waits_for_etx);
+	RUN_TEST(test_no_reply_to_other_nodes_poll);
+	RUN_TEST(test_no_reply_to_other_nodes_get);
+	RUN_TEST(test_poll_still_replies_after_ignoring);
+	RUN_TEST(test_process_returns_poll);
+	RUN_TEST(test_process_returns_set);
+	RUN_TEST(test_process_returns_noop_for_foreign_frame);
+	RUN_TEST(test_process_returns_noop_for_init);
 	RUN_TEST(test_triple_syn_accepted);
 	RUN_TEST(test_quad_syn_accepted);
 	RUN_TEST(test_syn_in_body_not_resynced);

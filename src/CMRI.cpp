@@ -39,7 +39,7 @@ CMRI::CMRI(unsigned int address, unsigned int input_bits, unsigned int output_bi
 
       // parsing state
       ,
-      _mode(PREAMBLE_1), _rx_index(0), _rx_data_len(0), _init_handler(nullptr), _init_buffer(nullptr), _init_length(0), _transmit_delay_us(TRANSMIT_DELAY_US), _last_byte_time_ms(0)
+      _mode(PREAMBLE_1), _rx_index(0), _rx_data_len(0), _rx_packet_type(NOOP), _init_handler(nullptr), _init_buffer(nullptr), _init_length(0), _transmit_delay_us(TRANSMIT_DELAY_US), _last_byte_time_ms(0)
 
 {
 	// clear to zero
@@ -263,6 +263,9 @@ uint8_t CMRI::_decode(uint8_t c)
 		break;
 
 	case IGNORE_CMD:
+		// A frame addressed to another node must never trigger a reply, even if
+		// a previous poll left _rx_packet_type == POLL.
+		_rx_packet_type = NOOP;
 		_mode = IGNORE_DATA;
 		break;
 
